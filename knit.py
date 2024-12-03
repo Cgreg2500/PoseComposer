@@ -25,6 +25,7 @@ from ControlNet.annotator.util import resize_image, HWC3
 from ControlNet.annotator.openpose import OpenposeDetector
 from ControlNet.cldm.model import create_model, load_state_dict
 from ControlNet.cldm.ddim_hacked import DDIMSampler
+from ControlNet.cldm.cldm import ControlNet
 
 apply_openpose = OpenposeDetector()
 
@@ -38,7 +39,7 @@ def stable_diffusion_call_control_and_fastcomposer(
     num_inference_steps: int = 50,
     guidance_scale: float = 7.5,
     negative_prompt: Optional[Union[str, List[str]]] = None,
-    num_images_per_prompt = Optional[int] = 1,
+    num_images_per_prompt : Optional[int] = 1,
     eta: float = 0.0,
     generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     latents: Optional[torch.FloatTensor] = None,
@@ -200,13 +201,24 @@ def stable_diffusion_call_control_and_fastcomposer(
         images=image, nsfw_content_detected=has_nsfw_concept
     )
 
+class ControlNetWrapper(nn.Module):
+    '''
+    Higher level module that contains ControlNet and other related networks
+    # TODO add input encoder, condition input layer, higher level params
+    '''
+    def __init__(self, control_model_params):
+        super().__init__()
+        self.control_model = ControlNet(**control_model_params)
+        # self.control_model.load_state_dict(torch.load(control_state_dict_path, map_location='cpu'))
+
+
 
 class CombinedSampler:
-    def __init__(self, control_model_path, control_state_dict_path, schedule="linear", **kwargs):
-        self.control_model = create_model(control_model_path)
-        self.control_model.load_state_dict(load_state_dict(control_state_dict_path, location='cuda'))
-        self.control_model = self.control_model.cuda()
-        self.ddim_sampler = DDIMSampler(self.control_model)
+    def __init__(self, control_model_params, control_state_dict_path, schedule="linear", **kwargs):
+        self.control = ControlNetWrapper(control_model_params)
+        self.control.load_state_dict(torch.load(control_state_dict_path, map_location='cpu'), strict=False)
+        # self.control_model = self.control_model.cuda()
+        self.ddim_sampler = DDIMSampler(self.control)
         self.schedule = schedule
                                                             
     def setup_fastcomposer(self, args, accelerator, weight_dtype):
@@ -399,9 +411,24 @@ def main():
     cn_model_path = "./ControlNet/models/cldm_v15.yaml"
     cn_state_dict_path = "./ControlNet/models/control_sd15_openpose.pth"
 
-    # Initialize combined sampler
-    sampler = CombinedSampler(cn_model_path, cn_state_dict_path)
+    cn_model_params = {
+        "image_size": 32, # unused
+        "in_channels": 4,
+        "hint_channels": 3,
+        "model_channels": 320,
+        "attention_resolutions": [ 4, 2, 1 ],
+        "num_res_blocks": 2,
+        "channel_mult": [ 1, 2, 4, 4 ],
+        "num_heads": 8,
+        "use_spatial_transformer": True,
+        "transformer_depth": 1,
+        "context_dim": 768,
+        "use_checkpoint": True,
+        "legacy": False
+    }
 
+    # Initialize combined sampler
+    sampler = CombinedSampler(cn_model_params, cn_state_dict_path)
     # Setup both components
     sampler.setup_fastcomposer(args, accelerator, weight_dtype)
 
