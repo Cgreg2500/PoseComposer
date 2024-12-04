@@ -228,11 +228,11 @@ def stable_diffusion_call_control_and_fastcomposer(
     elif output_type == "pil":
         # 8. Post-processing
         image = self.decode_latents(latents.half())
-
+        print("latents", image)
         # 9. Run safety checker 
-        image, has_nsfw_concept = self.run_safety_checker(
-            image, device, prompt_embeds.dtype
-        )
+      #  image, has_nsfw_concept = self.run_safety_checker(
+      #      image, device, prompt_embeds.dtype
+      #  )
 
         # 10. Convert to PIL
         image = self.numpy_to_pil(image)
@@ -241,14 +241,15 @@ def stable_diffusion_call_control_and_fastcomposer(
         image = self.decode_latents(latents)
 
         # 9. Run safety checker
-        image, has_nsfw_concept = self.run_safety_checker(
-            image, device, prompt_embeds.dtype
-        )
+       # image, has_nsfw_concept = self.run_safety_checker(
+       #     image, device, prompt_embeds.dtype
+       # )
 
     # Offload last model to CPU
     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
         self.final_offload_hook.offload()
 
+    has_nsfw_concept = None
     if not return_dict:
         return (image, has_nsfw_concept)
 
@@ -259,10 +260,10 @@ def stable_diffusion_call_control_and_fastcomposer(
 
 class CombinedSampler:
     def __init__(self, control_model_path, control_state_dict_path, schedule="linear", **kwargs):
-        self.control_model = create_model(control_model_path)
-        self.control_model.load_state_dict(load_state_dict(control_state_dict_path, location='cpu'))
-        self.control_model = self.control_model.cuda()
-        self.ddim_sampler = DDIMSampler(self.control_model)
+        # self.control_model = create_model(control_model_path)
+        # self.control_model.load_state_dict(load_state_dict(control_state_dict_path, location='cpu'))
+        # self.control_model = self.control_model.cuda()
+        # self.ddim_sampler = DDIMSampler(self.control_model)
         self.schedule = schedule
 
     def setup_fastcomposer(self, args, accelerator, weight_dtype):
@@ -327,8 +328,8 @@ class CombinedSampler:
         else:
             img = x_T
 
-        if timesteps is None:
-            timesteps = self.ddim_sampler.ddpm_num_timesteps 
+        # if timesteps is None:
+            # timesteps = self.ddim_sampler.ddpm_num_timesteps 
 
         # Setup FastComposer condition
         if fastcomposer_args is not None:
@@ -389,7 +390,7 @@ class CombinedSampler:
             )
 
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
-        time_range = reversed(range(0,timesteps)) 
+        # time_range = reversed(range(0,timesteps)) 
         total_steps = fastcomposer_args.inference_steps 
         
         images = self.fastcomposer_pipe.inference(
@@ -402,7 +403,7 @@ class CombinedSampler:
             #eta,
             #fastcomposer_args.generator,
             guidance_scale=fastcomposer_args.guidance_scale,
-            control_net_model = self.ddim_sampler,
+            #control_net_model = self.ddim_sampler,
             control_net_cond_embed = controlnet_cond,
             start_merge_step = fastcomposer_args.start_merge_step,
             prompt_embeds = encoder_hidden_states,
@@ -417,7 +418,7 @@ def main():
     # Parse arguments
     args = parse_args()
     accelerator = Accelerator(mixed_precision=args.mixed_precision)
-
+    print(accelerator.device)
     if accelerator.is_main_process:
         if args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
@@ -454,11 +455,11 @@ def main():
     detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
 
     num_samples = 1
-    control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
-    control = torch.stack([control for _ in range(num_samples)], dim=0)
-    control = einops.rearrange(control, 'b h w c -> b c h w').clone()
-
-    controlnet_cond = control  # Your ControlNet condition
+    #control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
+    #control = torch.stack([control for _ in range(num_samples)], dim=0)
+    #control = einops.rearrange(control, 'b h w c -> b c h w').clone()
+    controlnet_cond = None
+    #controlnet_cond = control  # Your ControlNet condition
     shape = (1, 4, 512, 512)  # Your desired shape
 
     # Run combined sampling
@@ -467,7 +468,8 @@ def main():
         controlnet_cond=controlnet_cond,
         shape=shape,
         unconditional_guidance_scale=args.guidance_scale,
-        fastcomposer_args=args
+        fastcomposer_args=args,
+        device = accelerator.device
     )
 
     print(f"{images=}")
